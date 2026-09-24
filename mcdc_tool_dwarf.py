@@ -80,7 +80,17 @@ class DwarfLoc:
 def parse_locs(cu, sfilelocs: list[SFileLocMap]) -> list[DwarfLoc]:
     ret: list[LineState] = list()
     lp: LineProgram = cu.dwarfinfo.line_program_for_CU(cu)
-    fnames = [x["DW_LNCT_path"].decode() for x in lp["file_names"]]
+    dirs = [d.decode() if isinstance(d, bytes) else str(d)
+            for d in lp["include_directory"]]
+
+    def _file_path(entry) -> str:
+        path = entry["DW_LNCT_path"].decode()
+        directory = dirs[entry["DW_LNCT_directory_index"]]
+        if os.path.isabs(path) or os.path.isabs(directory):
+            return path
+        return os.path.join(directory, path)
+
+    fnames = [_file_path(x) for x in lp["file_names"]]
     lp_entries = lp.get_entries()
     for lp_entry in lp_entries:
         if lp_entry.state:
@@ -423,14 +433,17 @@ def process_cu(cu: CompileUnit, elffile: ELFFile, dis, expressions: list[SAST],
                         inline, next_expr.end_addr) and inline.high_addr >= next_expr.end_addr:
                     next_expr.end_addr = inline.high_addr + 16
                     TRACE_CU(f"Extending end of expr to {next_expr.end_addr:x}")
+        data = None
         try:
             data = get_code_for_range(elffile, next_expr.start_addr, next_expr.end_addr)
         except Exception:
             pass
         TRACE_CU(f"Found next expr: {next_expr}")
         if not data:
+            # No code for this range: nothing to match against.
             global ELF_RANGE_FAIL_CNT
             ELF_RANGE_FAIL_CNT += 1
+            continue
 
 
 #            raise Exception(f"Can't get data for expr {next_expr}")
